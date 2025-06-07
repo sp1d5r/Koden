@@ -1,0 +1,20 @@
+[project]
+name = "koden-backend"
+version = "0.1.0"
+description = "Backend service for Koden"
+requires-python = ">=3.8"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "python-multipart>=0.0.6",
+]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+package-type = "application"
+
+[tool.pdm.scripts]
+dev = "uvicorn app.main:app --reload --host 0.0.0.0 --port 8000" 
