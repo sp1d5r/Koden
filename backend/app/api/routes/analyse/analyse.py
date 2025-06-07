@@ -6,7 +6,7 @@ from typing import Optional, Set
 
 router = APIRouter()
 
-@router.post("/analyze/", response_model=AnalysisResponse)
+@router.post("/", response_model=AnalysisResponse)
 async def analyze_repo(
     zip_file: UploadFile = File(..., description="Zip file containing the repository to analyze"),
     ignore_patterns: Optional[Set[str]] = Form(None, description="Patterns of files to ignore during analysis")
