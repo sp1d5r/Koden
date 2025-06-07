@@ -4,12 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 from app.core.database import get_session
 from app.core.auth import get_current_user
+from app.models.api.users import UserCreate, UserUpdate, UserResponse, UserListResponse
 
 router = APIRouter()
 
-@router.post("/", response_model=User, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
-    user: User,
+    user: UserCreate,
     session: Session = Depends(get_session),
     firebase_user: dict = Depends(get_current_user)
 ):
@@ -22,15 +23,19 @@ async def create_user(
             detail="Email already registered"
         )
     
-    # Set the Firebase UID
-    user.firebase_uid = firebase_user["uid"]
+    # Create new user
+    db_user = User(
+        email=user.email,
+        name=user.name,
+        firebase_uid=firebase_user["uid"]
+    )
     
-    session.add(user)
+    session.add(db_user)
     session.commit()
-    session.refresh(user)
-    return user
+    session.refresh(db_user)
+    return db_user
 
-@router.get("/", response_model=List[User])
+@router.get("/", response_model=UserListResponse)
 async def read_users(
     skip: int = 0,
     limit: int = 100,
@@ -39,9 +44,15 @@ async def read_users(
 ):
     """Get all users with pagination."""
     users = session.exec(select(User).offset(skip).limit(limit)).all()
-    return users
+    total = session.exec(select(User)).count()
+    return UserListResponse(
+        users=users,
+        total=total,
+        skip=skip,
+        limit=limit
+    )
 
-@router.get("/me", response_model=User)
+@router.get("/me", response_model=UserResponse)
 async def read_current_user(
     session: Session = Depends(get_session),
     firebase_user: dict = Depends(get_current_user)
@@ -59,7 +70,7 @@ async def read_current_user(
     
     return user
 
-@router.get("/{user_id}", response_model=User)
+@router.get("/{user_id}", response_model=UserResponse)
 async def read_user(
     user_id: int,
     session: Session = Depends(get_session),
@@ -74,10 +85,10 @@ async def read_user(
         )
     return user
 
-@router.patch("/{user_id}", response_model=User)
+@router.patch("/{user_id}", response_model=UserResponse)
 async def update_user(
     user_id: int,
-    user_update: User,
+    user_update: UserUpdate,
     session: Session = Depends(get_session),
     firebase_user: dict = Depends(get_current_user)
 ):
@@ -97,7 +108,7 @@ async def update_user(
         )
     
     # Check if email is being updated and if it's already taken
-    if user_update.email != user.email:
+    if user_update.email and user_update.email != user.email:
         existing_user = session.exec(
             select(User).where(User.email == user_update.email)
         ).first()
