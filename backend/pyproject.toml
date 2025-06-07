@@ -7,6 +7,12 @@ dependencies = [
     "fastapi>=0.104.0",
     "uvicorn>=0.24.0",
     "python-multipart>=0.0.6",
+    "sqlmodel>=0.0.14",
+    "alembic>=1.13.1",
+    "psycopg2-binary>=2.9.9",
+    "python-dotenv>=1.0.0",
+    "firebase-admin>=6.4.0",
+    "pydantic-settings>=2.8.1"
 ]
 
 [build-system]
@@ -14,7 +20,12 @@ requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
 [tool.pdm]
-package-type = "application"
+distribution = false
 
 [tool.pdm.scripts]
-dev = "uvicorn app.main:app --reload --host 0.0.0.0 --port 8000" 
+dev = "uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+db-revision = "alembic revision --autogenerate -m"
+db-upgrade = "alembic upgrade head"
+db-downgrade = "alembic downgrade -1"
+db-history = "alembic history"
+db-current = "alembic current" 
