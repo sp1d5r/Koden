@@ -1,9 +1,10 @@
 from app.models.api.github import GitHubToken
 from fastapi import APIRouter, HTTPException, Response, Depends, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from app.services.github_service import GitHubService
 from app.core.auth import get_current_user, require_claim
 from app.core.logging import logger
+from app.tasks.github import download_github_repo
 import io
 from firebase_admin import auth as firebase_auth
 from typing import Optional
@@ -44,21 +45,27 @@ async def download_repository(
     ref: str, 
     current_user: dict = Depends(get_current_user)
 ):
-    """Download repository as zip file"""
-    zip_data = await github_service.get_repository_zip(
-        current_user['token'],
-        owner,
-        repo,
-        ref
-    )
-    
-    return StreamingResponse(
-        io.BytesIO(zip_data),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{owner}-{repo}-{ref}.zip"'
-        }
-    )
+    """Download repository as zip file using Celery background task"""
+    try:
+        # Start the Celery task
+        task = download_github_repo.delay(
+            owner=owner,
+            repo=repo,
+            ref=ref,
+            access_token=current_user['github_access_token']
+        )
+        
+        return JSONResponse({
+            "message": "Download started",
+            "task_id": task.id,
+            "status": "processing"
+        })
+    except Exception as e:
+        logger.error(f"Error starting download task: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start download: {str(e)}"
+        )
 
 
 @router.post("/store-token")
