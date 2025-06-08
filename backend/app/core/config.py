@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     STRIPE_API_KEY: str = os.getenv("STRIPE_API_KEY", "")
     CLAUDE_API_KEY: str = os.getenv("CLAUDE_API_KEY", "")
 
+    # Celery settings
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
+
     class Config:
         case_sensitive = True
         env_file = ".env"
