@@ -24,4 +24,3 @@ async def shutdown_event():
     logger.info("Shutting down Koden Backend")
 
 app.include_router(router, prefix="/api")
-app.include_router(github_router, prefix="/api/github")
