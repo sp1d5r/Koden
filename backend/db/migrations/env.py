@@ -11,12 +11,12 @@ from alembic import context
 # Load environment variables
 load_dotenv()
 
-# Add the parent directory to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+# Add the backend directory to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 # Import your models here
-from db.models.base import SQLModel
-from db.models.user import User  # Import all your models here
+from db.models import *
+from sqlmodel import SQLModel
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
