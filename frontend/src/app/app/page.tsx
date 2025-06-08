@@ -9,7 +9,7 @@ import { ProfileCompletionModal } from '@/components/modals/profile-completion-m
 import DashboardLayout from '@/components/templates/dashboard-layout'
 import { ConnectRepoModal } from '@/components/modals/ConnectRepoModal'
 import { RepoList } from '@/components/molecules/repo-list'
-import { Repo, RepoListResponse } from '@/types/repo'
+import { Repo, RepoListResponse, RepoDownloadTask } from '@/types/repo'
 import { Button } from '@/components/atoms/button'
 
 interface UserProfile {
@@ -55,7 +55,14 @@ export default function AppPage() {
   const fetchRepos = async () => {
     try {
       const data = await get<RepoListResponse>('/repos/')
-      setRepos(data.repos)
+      // Fetch tasks for each repo
+      const reposWithTasks = await Promise.all(
+        data.repos.map(async (repo) => {
+          const tasks = await get<RepoDownloadTask[]>(`/tasks/repos/${repo.id}/download-tasks`)
+          return { ...repo, download_tasks: tasks }
+        })
+      )
+      setRepos(reposWithTasks)
     } catch (err) {
       console.error('Failed to fetch repos:', err)
     }
