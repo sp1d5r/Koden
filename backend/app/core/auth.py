@@ -4,6 +4,7 @@ from firebase_admin import credentials, auth
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.core.config import settings
+from app.core.logging import logger
 
 # Initialize Firebase Admin
 cred = credentials.Certificate({
@@ -32,7 +33,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     try:
         token = credentials.credentials
         decoded_token = auth.verify_id_token(token)
-        return decoded_token
+        logger.info(decoded_token)
+        return {**decoded_token, "token": token}
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
