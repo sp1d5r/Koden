@@ -7,6 +7,8 @@ import { formatDistanceToNow } from 'date-fns';
 import { Pencil, Trash2, ExternalLink } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/atoms/dialog';
 import { Input } from '@/components/atoms/input';
+import { Card } from '@/components/atoms/card';
+import { RepoDownloadTasks } from './repo-download-tasks';
 
 interface RepoListProps {
   repos: Repo[];
@@ -52,52 +54,25 @@ export function RepoList({ repos, onUpdate }: RepoListProps) {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="grid gap-6">
       {repos.map((repo) => (
-        <div
-          key={repo.id}
-          className="flex flex-col p-4 rounded-lg border hover:border-primary/50 transition-colors"
-        >
-          <div className="flex justify-between items-start gap-4">
-            <div className="flex-1 min-w-0">
-              <h3 className="font-medium text-lg truncate">
-                <a
-                  href={repo.github_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:underline flex items-center gap-1"
-                >
-                  {repo.name}
-                  <ExternalLink className="h-4 w-4" />
-                </a>
-              </h3>
-              <div className="flex items-center gap-2 mt-2">
-                <Badge variant="secondary" className="text-xs">
-                  {repo.branch}
-                </Badge>
-                <span className="text-xs text-muted-foreground">
-                  Updated {formatDistanceToNow(new Date(repo.updated_at))} ago
-                </span>
-              </div>
+        <Card key={repo.id} className="p-6">
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-semibold">{repo.name}</h2>
+              <p className="text-sm text-muted-foreground">
+                {repo.github_url}
+                {repo.branch && ` (${repo.branch})`}
+              </p>
             </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleEdit(repo)}
-              >
-                <Pencil className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => handleDelete(repo.id)}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
+            
+            <RepoDownloadTasks 
+              repoId={repo.id}
+              tasks={repo.download_tasks || []}
+              onUpdate={onUpdate}
+            />
           </div>
-        </div>
+        </Card>
       ))}
 
       <Dialog open={!!editingRepo} onOpenChange={() => setEditingRepo(null)}>
