@@ -11,6 +11,8 @@ import { ConnectRepoModal } from '@/components/modals/ConnectRepoModal'
 import { RepoList } from '@/components/molecules/repo-list'
 import { Repo, RepoListResponse, RepoDownloadTask } from '@/types/repo'
 import { Button } from '@/components/atoms/button'
+import { useQuery } from '@tanstack/react-query'
+import { Skeleton } from '@/components/atoms/skeleton'
 
 interface UserProfile {
   id: number;
@@ -24,9 +26,6 @@ export default function AppPage() {
   const router = useRouter()
   const { get } = useAPI()
   const [profile, setProfile] = useState<UserProfile | null>(null)
-  const [repos, setRepos] = useState<Repo[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [showCompletionModal, setShowCompletionModal] = useState(false)
   const [showConnectRepo, setShowConnectRepo] = useState(false)
 
@@ -46,14 +45,14 @@ export default function AppPage() {
       if (err.response?.data?.detail === "User profile not found") {
         setShowCompletionModal(true)
       } else {
-        setError('Failed to load profile')
         console.error('Profile fetch error:', err)
       }
     }
   }
 
-  const fetchRepos = async () => {
-    try {
+  const { data: reposData, isLoading: isLoadingRepos, refetch: refetchRepos } = useQuery({
+    queryKey: ['repos'],
+    queryFn: async () => {
       const data = await get<RepoListResponse>('/repos/')
       // Fetch tasks for each repo
       const reposWithTasks = await Promise.all(
@@ -62,59 +61,29 @@ export default function AppPage() {
           return { ...repo, download_tasks: tasks }
         })
       )
-      setRepos(reposWithTasks)
-    } catch (err) {
-      console.error('Failed to fetch repos:', err)
-    }
-  }
+      return reposWithTasks
+    },
+    enabled: !!user,
+  })
 
   useEffect(() => {
-    const initialize = async () => {
-      if (user) {
-        await Promise.all([fetchProfile(), fetchRepos()])
-      }
-      setLoading(false)
+    if (user) {
+      fetchProfile()
     }
-
-    initialize()
   }, [user])
 
   const handleProfileComplete = async () => {
     setShowCompletionModal(false)
-    setLoading(true)
     try {
       const data = await get<UserProfile>('/users/me')
       setProfile(data)
     } catch (err) {
-      setError('Failed to load profile')
       console.error('Profile fetch error after completion:', err)
-    } finally {
-      setLoading(false)
     }
   }
 
-  const handleRepoUpdate = async () => {
-    try {
-      const data = await get<RepoListResponse>('/repos/');
-      setRepos(data.repos);
-    } catch (err) {
-      console.error('Failed to fetch repos:', err);
-    }
-  };
-
-  if (authLoading || loading || !user) {
+  if (authLoading || !user) {
     return <FullPageLoading />
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <h2 className="text-2xl font-bold text-destructive mb-2">Error</h2>
-          <p className="text-muted-foreground">{error}</p>
-        </div>
-      </div>
-    )
   }
 
   return (
@@ -127,7 +96,17 @@ export default function AppPage() {
               Connect Repository
             </Button>
           </div>
-          {repos.length === 0 ? (
+          
+          {isLoadingRepos ? (
+            <div className="space-y-4">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="p-6 border rounded-lg">
+                  <Skeleton className="h-6 w-1/3 mb-2" />
+                  <Skeleton className="h-4 w-1/2" />
+                </div>
+              ))}
+            </div>
+          ) : reposData?.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-muted-foreground mb-4">
                 You haven't connected any repositories yet.
@@ -137,14 +116,14 @@ export default function AppPage() {
               </Button>
             </div>
           ) : (
-            <RepoList repos={repos} onUpdate={handleRepoUpdate} />
+            <RepoList repos={reposData || []} onUpdate={refetchRepos} />
           )}
         </div>
       </DashboardLayout>
       <ConnectRepoModal
         open={showConnectRepo}
         onClose={() => setShowConnectRepo(false)}
-        onConnect={handleRepoUpdate}
+        onConnect={refetchRepos}
       />
       <ProfileCompletionModal
         isOpen={showCompletionModal}
