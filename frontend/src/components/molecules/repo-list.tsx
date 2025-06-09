@@ -4,11 +4,12 @@ import { Repo, RepoUpdate } from '@/types/repo';
 import { Button } from '@/components/atoms/button';
 import { Badge } from '@/components/atoms/badge';
 import { formatDistanceToNow } from 'date-fns';
-import { Pencil, Trash2, ExternalLink } from 'lucide-react';
+import { Pencil, Trash2, ExternalLink, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/atoms/dialog';
 import { Input } from '@/components/atoms/input';
 import { Card } from '@/components/atoms/card';
 import { RepoDownloadTasks } from './repo-download-tasks';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 interface RepoListProps {
   repos: Repo[];
@@ -17,8 +18,28 @@ interface RepoListProps {
 
 export function RepoList({ repos, onUpdate }: RepoListProps) {
   const { patch, delete: del } = useAPI();
+  const queryClient = useQueryClient();
   const [editingRepo, setEditingRepo] = useState<Repo | null>(null);
   const [editForm, setEditForm] = useState<RepoUpdate>({});
+
+  const updateRepoMutation = useMutation({
+    mutationFn: async ({ repoId, data }: { repoId: number; data: RepoUpdate }) => {
+      return patch<Repo>(`/repos/${repoId}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['repos'] });
+      setEditingRepo(null);
+    },
+  });
+
+  const deleteRepoMutation = useMutation({
+    mutationFn: async (repoId: number) => {
+      return del(`/repos/${repoId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['repos'] });
+    },
+  });
 
   const handleEdit = (repo: Repo) => {
     setEditingRepo(repo);
@@ -31,26 +52,12 @@ export function RepoList({ repos, onUpdate }: RepoListProps) {
 
   const handleSave = async () => {
     if (!editingRepo) return;
-
-    try {
-      await patch<Repo>(`/repos/${editingRepo.id}`, editForm);
-      onUpdate();
-      setEditingRepo(null);
-    } catch (error) {
-      console.error('Failed to update repo:', error);
-    }
+    updateRepoMutation.mutate({ repoId: editingRepo.id, data: editForm });
   };
 
   const handleDelete = async (repoId: number) => {
     if (!confirm('Are you sure you want to delete this repository?')) return;
-
-    try {
-      await del(`/repos/${repoId}`);
-      const updatedRepos = repos.filter(repo => repo.id !== repoId);
-      onUpdate();
-    } catch (error) {
-      console.error('Failed to delete repo:', error);
-    }
+    deleteRepoMutation.mutate(repoId);
   };
 
   return (
@@ -58,12 +65,36 @@ export function RepoList({ repos, onUpdate }: RepoListProps) {
       {repos.map((repo) => (
         <Card key={repo.id} className="p-6">
           <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-semibold">{repo.name}</h2>
-              <p className="text-sm text-muted-foreground">
-                {repo.github_url}
-                {repo.branch && ` (${repo.branch})`}
-              </p>
+            <div className="flex justify-between items-start">
+              <div>
+                <h2 className="text-xl font-semibold">{repo.name}</h2>
+                <p className="text-sm text-muted-foreground">
+                  {repo.github_url}
+                  {repo.branch && ` (${repo.branch})`}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => handleEdit(repo)}
+                  disabled={updateRepoMutation.isPending || deleteRepoMutation.isPending}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => handleDelete(repo.id)}
+                  disabled={updateRepoMutation.isPending || deleteRepoMutation.isPending}
+                >
+                  {deleteRepoMutation.isPending && deleteRepoMutation.variables === repo.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
             </div>
             
             <RepoDownloadTasks 
@@ -84,6 +115,7 @@ export function RepoList({ repos, onUpdate }: RepoListProps) {
               <Input
                 value={editForm.name || ''}
                 onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                disabled={updateRepoMutation.isPending}
               />
             </div>
             <div>
@@ -91,6 +123,7 @@ export function RepoList({ repos, onUpdate }: RepoListProps) {
               <Input
                 value={editForm.github_url || ''}
                 onChange={(e) => setEditForm({ ...editForm, github_url: e.target.value })}
+                disabled={updateRepoMutation.isPending}
               />
             </div>
             <div>
@@ -98,13 +131,30 @@ export function RepoList({ repos, onUpdate }: RepoListProps) {
               <Input
                 value={editForm.branch || ''}
                 onChange={(e) => setEditForm({ ...editForm, branch: e.target.value })}
+                disabled={updateRepoMutation.isPending}
               />
             </div>
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setEditingRepo(null)}>
+              <Button 
+                variant="outline" 
+                onClick={() => setEditingRepo(null)}
+                disabled={updateRepoMutation.isPending}
+              >
                 Cancel
               </Button>
-              <Button onClick={handleSave}>Save Changes</Button>
+              <Button 
+                onClick={handleSave}
+                disabled={updateRepoMutation.isPending}
+              >
+                {updateRepoMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  'Save Changes'
+                )}
+              </Button>
             </div>
           </div>
         </DialogContent>

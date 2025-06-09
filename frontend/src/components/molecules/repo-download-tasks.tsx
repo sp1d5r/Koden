@@ -3,6 +3,9 @@ import { Badge } from '@/components/atoms/badge'
 import { Button } from '@/components/atoms/button'
 import { useAPI } from '@/hooks/useAPI'
 import { useState, useEffect } from 'react'
+import { toast } from 'sonner'
+import { useQuery, useMutation, useQueryClient, UseQueryOptions } from '@tanstack/react-query'
+import { Trash2 } from 'lucide-react'
 
 interface RepoDownloadTasksProps {
   repoId: number;
@@ -16,6 +19,11 @@ interface TaskStatus {
   error_message?: string;
 }
 
+interface TaskStatusResponse {
+  taskId: string;
+  status: TaskStatus | null;
+}
+
 const statusColors = {
   pending: 'bg-yellow-500',
   processing: 'bg-blue-500',
@@ -23,64 +31,114 @@ const statusColors = {
   failed: 'bg-red-500'
 }
 
-const POLLING_INTERVAL = 2000; // 2 seconds
-
 export function RepoDownloadTasks({ repoId, tasks, onUpdate }: RepoDownloadTasksProps) {
-  const { post, get } = useAPI()
+  const { post, get, delete: deleteTask } = useAPI()
+  const queryClient = useQueryClient()
   const [isLoading, setIsLoading] = useState(false)
-  const [activeTasks, setActiveTasks] = useState<Set<string>>(new Set())
 
-  // Update active tasks set when tasks prop changes
-  useEffect(() => {
-    const newActiveTasks = new Set(
-      tasks
-        .filter(task => task.status === 'pending' || task.status === 'processing')
-        .map(task => task.task_id)
-    )
-    setActiveTasks(newActiveTasks)
-  }, [tasks])
+  // Get active tasks (only pending or processing)
+  const activeTasks = tasks.filter(task => 
+    task.status === 'pending' || task.status === 'processing'
+  )
 
-  // Poll for task status updates
-  useEffect(() => {
-    if (activeTasks.size === 0) return
-
-    const pollTasks = async () => {
-      const updates = await Promise.all(
-        Array.from(activeTasks).map(async (taskId) => {
+  // Single query for all active tasks
+  const { data: taskStatuses, error } = useQuery<TaskStatusResponse[]>({
+    queryKey: ['taskStatuses', activeTasks.map(t => t.task_id)],
+    queryFn: async () => {
+      const statuses = await Promise.all(
+        activeTasks.map(async (task) => {
           try {
-            const response = await get<TaskStatus>(`/tasks/repos/${repoId}/download-tasks/${taskId}/status`)
-            return { taskId, status: response.status }
-          } catch (error) {
-            console.error(`Failed to poll task ${taskId}:`, error)
-            return { taskId, status: 'failed' as const }
+            const response = await get<TaskStatus>(`/tasks/${task.task_id}/status`)
+            return { taskId: task.task_id, status: response }
+          } catch (error: any) {
+            // If task is not found (404), mark it as failed
+            if (error?.response?.status === 404) {
+              return { 
+                taskId: task.task_id, 
+                status: { 
+                  status: 'failed', 
+                  error_message: 'Task not found in queue' 
+                } 
+              }
+            }
+            console.error(`Failed to poll task ${task.task_id}:`, error)
+            return { taskId: task.task_id, status: null }
           }
         })
       )
+      return statuses
+    },
+    refetchInterval: activeTasks.length > 0 ? 2000 : false,
+    enabled: activeTasks.length > 0,
+    gcTime: 0,
+    staleTime: 0
+  })
 
-      // Check if any tasks are no longer active
-      const stillActive = updates.filter(update => 
-        update.status === 'pending' || update.status === 'processing'
-      ).map(update => update.taskId)
-
-      if (stillActive.length !== activeTasks.size) {
-        // Some tasks completed or failed, trigger a full update
+  // Handle status updates
+  useEffect(() => {
+    if (taskStatuses) {
+      const hasStatusChange = taskStatuses.some(({ taskId, status }) => {
+        const task = tasks.find(t => t.task_id === taskId)
+        return task && status && status.status !== task.status
+      })
+      
+      if (hasStatusChange) {
         onUpdate()
       }
     }
+  }, [taskStatuses, tasks, onUpdate])
 
-    const interval = setInterval(pollTasks, POLLING_INTERVAL)
-    return () => clearInterval(interval)
-  }, [activeTasks, get, onUpdate])
+  // Handle errors
+  useEffect(() => {
+    if (error) {
+      console.error('Error polling tasks:', error)
+      toast.error('Failed to get task statuses')
+    }
+  }, [error])
+
+  // Mutation for creating new download task
+  const createDownloadTask = useMutation({
+    mutationFn: async () => {
+      const response = await post<RepoDownloadTask>(`/tasks/repos/${repoId}/download`, {})
+      return response
+    },
+    onSuccess: () => {
+      toast.success('Download task started successfully')
+      onUpdate()
+    },
+    onError: (error: any) => {
+      const errorMessage = error?.response?.data?.detail || 'Failed to start download'
+      toast.error(errorMessage)
+    }
+  })
+
+  // Mutation for deleting a task
+  const deleteTaskMutation = useMutation({
+    mutationFn: async (taskId: string) => {
+      await deleteTask(`/tasks/${taskId}`)
+    },
+    onSuccess: () => {
+      toast.success('Task deleted successfully')
+      onUpdate()
+    },
+    onError: (error: any) => {
+      const errorMessage = error?.response?.data?.detail || 'Failed to delete task'
+      toast.error(errorMessage)
+    }
+  })
 
   const handleDownload = async () => {
     setIsLoading(true)
     try {
-      await post(`/tasks/repos/${repoId}/download`, {})
-      onUpdate()
-    } catch (error) {
-      console.error('Failed to start download:', error)
+      await createDownloadTask.mutateAsync()
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const handleDelete = async (taskId: string) => {
+    if (window.confirm('Are you sure you want to delete this task?')) {
+      await deleteTaskMutation.mutateAsync(taskId)
     }
   }
 
@@ -90,10 +148,10 @@ export function RepoDownloadTasks({ repoId, tasks, onUpdate }: RepoDownloadTasks
         <h3 className="text-lg font-semibold">Download Tasks</h3>
         <Button 
           onClick={handleDownload} 
-          disabled={isLoading}
+          disabled={isLoading || createDownloadTask.isPending}
           variant="outline"
         >
-          {isLoading ? 'Starting...' : 'Download Repository'}
+          {isLoading || createDownloadTask.isPending ? 'Starting...' : 'Download Repository'}
         </Button>
       </div>
       
@@ -119,11 +177,21 @@ export function RepoDownloadTasks({ repoId, tasks, onUpdate }: RepoDownloadTasks
                   <p className="text-sm text-destructive">{task.error_message}</p>
                 )}
               </div>
-              {task.status === 'completed' && task.output_path && (
-                <Button variant="link" size="sm">
-                  View Files
+              <div className="flex items-center gap-2">
+                {task.status === 'completed' && task.output_path && (
+                  <Button variant="link" size="sm">
+                    View Files
+                  </Button>
+                )}
+                <Button 
+                  variant="ghost" 
+                  size="icon"
+                  onClick={() => handleDelete(task.task_id)}
+                  disabled={deleteTaskMutation.isPending}
+                >
+                  <Trash2 className="h-4 w-4 text-destructive" />
                 </Button>
-              )}
+              </div>
             </div>
           ))}
         </div>
