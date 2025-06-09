@@ -69,19 +69,34 @@ async def create_repo_download_task(
     try:
         # Parse GitHub URL to get owner and repo name
         owner, repo_name = parse_github_url(repo.github_url)
+        logger.info(f"Creating download task for {owner}/{repo_name}")
         
-        # Create Celery task
-        celery_task = download_github_repo.delay(
-            owner=owner,
-            repo=repo_name,
-            ref=repo.branch or "main",
-            access_token=current_user.get("github_access_token")
+        # Create Celery task with explicit queue
+        celery_task = download_github_repo.apply_async(
+            args=[owner, repo_name, repo.branch or "main", current_user.get("github_access_token")],
+            queue='default',
+            routing_key='default'
         )
+        logger.info(f"Celery task created with ID: {celery_task.id}")
         
         # Create task record in database
         task = task_service.create_download_task(repo_id, celery_task.id)
+        logger.info(f"Database task record created: {task}")
+        
+        # Verify task is in Redis
+        task_in_redis = celery_app.AsyncResult(celery_task.id)
+        logger.info(f"Task in Redis status: {task_in_redis.status}, ready: {task_in_redis.ready()}")
+        
+        # Check if task is in the queue
+        i = celery_app.control.inspect()
+        active = i.active()
+        reserved = i.reserved()
+        scheduled = i.scheduled()
+        logger.info(f"Task queues status - Active: {active}, Reserved: {reserved}, Scheduled: {scheduled}")
+        
         return task
     except ValueError as e:
+        logger.error(f"Invalid GitHub URL: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
@@ -93,7 +108,7 @@ async def create_repo_download_task(
             detail="Failed to create download task"
         )
 
-@router.get("/tasks/{task_id}/status")
+@router.get("/{task_id}/status")
 async def get_task_status(
     task_id: str,
     current_user: dict = Depends(get_current_user),
@@ -101,29 +116,96 @@ async def get_task_status(
 ):
     """Get the current status of a task."""
     task_service = TaskService(db)
+    
+    # Get task from database
     task = task_service.get_task(task_id)
+    logger.info(f"Task status from DB: {task}")
+    
+    # Get Celery task status
+    celery_task = celery_app.AsyncResult(task_id)
+    logger.info(f"Celery task status: {celery_task.status}, ready: {celery_task.ready()}, result: {celery_task.result}")
+    
+    # Map Celery states to our states
+    celery_status_map = {
+        'PENDING': 'pending',
+        'STARTED': 'processing',
+        'SUCCESS': 'completed',
+        'FAILURE': 'failed',
+        'RETRY': 'processing',
+        'REVOKED': 'failed'
+    }
+    celery_status = celery_status_map.get(celery_task.status, 'failed')
+    
+    # If task doesn't exist in DB but exists in Redis
+    if not task and celery_status != 'pending':
+        # Create task record in database
+        task = task_service.create_download_task(
+            repo_id=0,  # We don't know the repo_id at this point
+            task_id=task_id,
+            status=celery_status,
+            output_path=celery_task.result if celery_status == "completed" else None,
+            error_message=str(celery_task.result) if celery_status == "failed" else None
+        )
+        logger.info(f"Created missing task record: {task}")
+    elif not task:
+        # Task doesn't exist in either place
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found"
+        )
+    
+    # If task exists in Redis/Celery but status has changed
+    if celery_status != task.status:
+        logger.info(f"Updating task status from {task.status} to {celery_status}")
+        updated_task = task_service.update_task_status(
+            task_id=task_id,
+            status=celery_status,
+            output_path=celery_task.result if celery_status == "completed" else None,
+            error_message=str(celery_task.result) if celery_status == "failed" else None
+        )
+        if updated_task:
+            task = updated_task
+            logger.info(f"Updated task status: {task}")
+    
+    return {
+        "status": task.status,
+        "output_path": task.output_path,
+        "error_message": task.error_message
+    }
+
+@router.delete("/{task_id}")
+async def delete_task(
+    task_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_session)
+):
+    """Delete a task and its associated Celery task."""
+    task_service = TaskService(db)
+    
+    # First try to find it in repo_download_tasks
+    task = db.query(RepoDownloadTask).filter(RepoDownloadTask.task_id == task_id).first()
     if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Task not found"
         )
     
-    # Get Celery task status
-    celery_task = celery_app.AsyncResult(task_id)
-    celery_status = celery_task.status
-    
-    # Update task status in database if it has changed
-    if celery_status != task.status:
-        task_service.update_task_status(
-            task_id=task_id,
-            status=celery_status,
-            output_path=celery_task.result if celery_status == "completed" else None,
-            error_message=str(celery_task.result) if celery_status == "failed" else None
-        )
-        task = task_service.get_task(task_id)
-    
-    return {
-        "status": task.status,
-        "output_path": task.output_path,
-        "error_message": task.error_message
-    } 
+    try:
+        # Try to revoke the Celery task if it's still running
+        celery_task = celery_app.AsyncResult(task_id)
+        if celery_task.state in ['PENDING', 'STARTED']:
+            celery_app.control.revoke(task_id, terminate=True)
+            logger.info(f"Revoked Celery task {task_id}")
+        
+        # Delete the task from the database
+        db.delete(task)
+        db.commit()
+        logger.info(f"Deleted task {task_id} from database")
+        
+        return {"message": "Task deleted successfully"}
+    except Exception as e:
+        logger.error(f"Error deleting task {task_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete task"
+        ) 
