@@ -8,8 +8,8 @@ import asyncio
 from app.celery_app import celery_app
 from app.core.logging import logger
 
-@celery_app.task(name="download_github_repo")
-def download_github_repo(owner: str, repo: str, ref: str, access_token: str, output_path: Optional[str] = None) -> str:
+@celery_app.task(name="download_github_repo", bind=True, max_retries=3)
+def download_github_repo(self, owner: str, repo: str, ref: str, access_token: str, output_path: Optional[str] = None) -> str:
     """
     Download a GitHub repository and save it as a zip file.
     
@@ -23,22 +23,36 @@ def download_github_repo(owner: str, repo: str, ref: str, access_token: str, out
     Returns:
         str: Path to the downloaded zip file
     """
+    logger.info(f"Starting download task {self.request.id} for {owner}/{repo}@{ref}")
     try:
         # Create a temporary directory if no output path is provided
         if not output_path:
             temp_dir = tempfile.mkdtemp()
             output_path = os.path.join(temp_dir, f"{owner}-{repo}-{ref}.zip")
         
-        # Run the async download in a sync context
-        zip_data = asyncio.run(_download_repo_async(owner, repo, ref, access_token))
+        # Create a new event loop for this task
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
-        # Save the zip data to file
-        with open(output_path, 'wb') as f:
-            f.write(zip_data)
+        try:
+            # Run the async download in the new event loop
+            zip_data = loop.run_until_complete(_download_repo_async(owner, repo, ref, access_token))
+            
+            # Save the zip data to file
+            with open(output_path, 'wb') as f:
+                f.write(zip_data)
+            
+            logger.info(f"Successfully downloaded repository {owner}/{repo}@{ref}")
+            return output_path
+            
+        finally:
+            # Clean up the event loop
+            loop.close()
         
-        logger.info(f"Successfully downloaded repository {owner}/{repo}@{ref}")
-        return output_path
-        
+    except aiohttp.ClientError as e:
+        logger.error(f"Network error downloading repository: {str(e)}")
+        # Retry on network errors
+        self.retry(exc=e, countdown=5)
     except Exception as e:
         logger.error(f"Error downloading repository: {str(e)}")
         raise
@@ -51,9 +65,11 @@ async def _download_repo_async(owner: str, repo: str, ref: str, access_token: st
         "Accept": "application/vnd.github.v3+json"
     }
     
+    logger.info(f"Downloading from URL: {url}")
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=headers) as response:
             if response.status != 200:
                 error_text = await response.text()
+                logger.error(f"GitHub API error: {error_text}")
                 raise Exception(f"Failed to download repository: {error_text}")
             return await response.read() 
